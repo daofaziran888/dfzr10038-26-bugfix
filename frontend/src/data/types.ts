@@ -14,6 +14,8 @@ export type ModuleMeta = {
   entity: string
   desc: string
   fields: string[]
+  /** 只读展示列：由跨模块链路写入，登记时不填写。 */
+  extraFields?: string[]
   statuses: string[]
   actions: string[]
   actionTargets: Record<string, string>

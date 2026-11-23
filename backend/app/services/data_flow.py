@@ -11,6 +11,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from app.services.catalog_report import describe_catalog_flow
 from app.store import store
 
 # ---------------------------------------------------------------------------
@@ -474,53 +475,57 @@ def flow_catalog_to_audit_to_report(feat_catalog_id: int) -> list[FlowEffect]:
     if fc is None or fc.get("status") != "已发布":
         return effects
 
-    index_no = str(fc.get("索引编号", ""))
-    catalog_name = str(fc.get("目录名称", ""))
-
-    # 触发治理审计
-    audit_rows = store.rows("govern_audit")
-    audit_entry = None
-    for arow in audit_rows:
-        if arow.get("status") == "待审计":
-            arow["status"] = "已通过"
-            arow["pending"] = False
-            arow["审计对象"] = catalog_name
-            arow["检查结果"] = "通过"
-            arow["审计时间"] = datetime.datetime.now().isoformat()
-            arow["整改状态"] = "无需整改"
-            arow["triggered_by"] = f"feat_catalog/{index_no}"
-            effects.append(FlowEffect(
-                "发起审计", "govern_audit", int(arow.get("id", 0)),
-                f"目录 {index_no}({catalog_name}) 发布后审计通过，触发特征报告生成",
-            ))
-            audit_entry = arow
-            break
-
-    if audit_entry is None:
-        # 创建隐式审计记录
-        audit_entry = {"id": 999, "检查结果": "通过"}
-
-    # 触发特征报告生成
-    _report_generate(catalog_name, index_no, effects)
-
+    # 发布动作本身已由 FeatCatalogService 完成“绑定审计批 → 读取真实结论
+    # → 领取成稿名额签发”。这里只读取关联结果做链路留痕，避免重复签发。
+    for name, module, entry_id, description in describe_catalog_flow(fc):
+        effects.append(FlowEffect(name, module, entry_id, description))
     return effects
 
 
-def _report_generate(catalog_name: str, index_no: str, effects: list[FlowEffect]):
-    """生成特征报告。"""
-    report_rows = store.rows("report_task")
-    for rrow in report_rows:
-        if rrow.get("status") == "草稿":
-            rrow["status"] = "已生成"
-            rrow["pending"] = False
-            rrow["特征范围"] = catalog_name
-            rrow["最近生成"] = datetime.datetime.now().isoformat()
-            rrow["triggered_by"] = f"feat_catalog/{index_no}"
-            effects.append(FlowEffect(
-                "启动生成", "report_task", int(rrow.get("id", 0)),
-                f"审计 {catalog_name} 通过后生成特征报告 {rrow.get('报告编号','')}",
-            ))
+# ============================ 链路8b: 治理审计结论 → 特征报告 ============================
+
+
+def _describe_audit_report_flow(audit_id: int) -> list[FlowEffect]:
+    """审计结论落库后，按目录已绑定的审计批描述报告结果（只读）。"""
+    audit = store.find("govern_audit", audit_id)
+    if audit is None:
+        return []
+    catalog = None
+    for row in store.rows("feat_catalog"):
+        if int(row.get("审计记录编号") or 0) == audit_id:
+            catalog = row
             break
+    if catalog is None:
+        return [FlowEffect(
+            "确认结论", "govern_audit", audit_id,
+            f"审计记录 {audit.get('记录编号', '')} 已落结论，未关联特征目录",
+        )]
+    return [
+        FlowEffect(name, module, entry_id, description)
+        for name, module, entry_id, description in describe_catalog_flow(catalog)
+    ]
+
+
+@_register(
+    "govern_audit/确认通过 → report_task/启动生成",
+    desc="审计确认通过后按目录绑定的审计批签发特征报告。",
+)
+def flow_audit_pass_to_report(govern_audit_id: int) -> list[FlowEffect]:
+    audit = store.find("govern_audit", govern_audit_id)
+    if audit is None or audit.get("status") != "已通过":
+        return []
+    return _describe_audit_report_flow(govern_audit_id)
+
+
+@_register(
+    "govern_audit/指派整改 → report_task/取消签发",
+    desc="审计驳回后对应目录只能待整改，不生成通过报告。",
+)
+def flow_audit_reject_to_report(govern_audit_id: int) -> list[FlowEffect]:
+    audit = store.find("govern_audit", govern_audit_id)
+    if audit is None or audit.get("status") != "整改中":
+        return []
+    return _describe_audit_report_flow(govern_audit_id)
 
 
 # ============================ 链路9: 质量规则→特征监控→特征报告 ============================

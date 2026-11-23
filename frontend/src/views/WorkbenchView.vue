@@ -40,14 +40,14 @@
     <table class="data-table">
       <thead>
         <tr>
-          <th v-for="column in meta.fields" :key="column">{{ column }}</th>
+          <th v-for="column in displayFields" :key="column">{{ column }}</th>
           <th>当前状态</th>
           <th>可执行动作</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)" :data-testid="`row-${row.id}`" :data-status="String(row.status)">
-          <td v-for="column in meta.fields" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in displayFields" :key="column">{{ row[column] ?? '—' }}</td>
           <td>{{ row.status }}</td>
           <td class="row-actions">
             <button
@@ -60,10 +60,19 @@
             >
               {{ action }}
             </button>
+            <button
+              v-if="meta.key === 'feat_catalog'"
+              class="link"
+              type="button"
+              :data-testid="`report-status-${row.id}`"
+              @click="checkReportStatus(row)"
+            >
+              报告状态
+            </button>
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="meta.fields.length + 2" class="empty-state">
+          <td :colspan="displayFields.length + 2" class="empty-state">
             暂无{{ meta.name }}数据，可先登记{{ meta.entity }}
           </td>
         </tr>
@@ -99,6 +108,7 @@ import { computed, onMounted, ref } from 'vue'
 import {
   createEntry,
   downloadEntries,
+  fetchCatalogReportStatus,
   listEntries,
   moduleMeta,
   runAction as applyAction,
@@ -112,6 +122,7 @@ const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = meta.fields.slice(0, 3)
+const displayFields = [...meta.fields, ...(meta.extraFields ?? [])]
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
@@ -170,9 +181,24 @@ async function runAction(action: string, row: EntryRow) {
   try {
     const result = await applyAction(meta.key, Number(row.id), action)
     if (!result.ok) throw new Error(result.message)
+    if (result.message) errorMessage.value = result.message
     await reload()
+    if (meta.key === 'feat_catalog') await checkReportStatus(row)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '操作失败'
+  }
+}
+
+async function checkReportStatus(row: EntryRow) {
+  try {
+    const status = await fetchCatalogReportStatus(Number(row.id))
+    const parts = [`签发状态：${status.签发状态 || '—'}`]
+    if (status.待办原因) parts.push(`原因：${status.待办原因}`)
+    if (status.审计批号) parts.push(`审计批：${status.审计批号}`)
+    if (status.报告编号) parts.push(`报告：${status.报告编号}`)
+    errorMessage.value = parts.join('；')
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '报告状态读取失败'
   }
 }
 

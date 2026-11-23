@@ -107,6 +107,19 @@ def get_flow_trace(module: str, entry_id: int):
     return {"module": module, "entry_id": entry_id, "effects": effects}
 
 
+@router.get("/{module}/{entry_id}/report-status")
+def get_report_status(module: str, entry_id: int) -> dict[str, Any]:
+    """目录的报告签发状态：没有成稿的目录可查待核或待名额的原因。"""
+    service = require_service(module)
+    resolver = getattr(service, "report_status", None)
+    if resolver is None:
+        raise HTTPException(status_code=404, detail=f"{service.ENTITY}不支持报告状态查询")
+    status = resolver(entry_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail=f"{service.ENTITY} {entry_id} 不存在或已归档")
+    return status
+
+
 @router.post("/{module}/{entry_id}/actions", response_model=ActionResult)
 def run_action(module: str, entry_id: int, payload: ActionPayload) -> ActionResult:
     service = require_service(module)

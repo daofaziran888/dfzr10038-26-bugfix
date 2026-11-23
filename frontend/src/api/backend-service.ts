@@ -37,6 +37,26 @@ export async function runAction(
   return await response.json()
 }
 
+export type CatalogReportStatus = {
+  索引编号: string
+  目录名称: string
+  签发状态: string
+  待办原因: string
+  审计记录编号?: number | null
+  审计批号?: string
+  审计状态?: string
+  审计结论?: string
+  报告编号?: string
+  报告状态?: string
+  审计依据?: string
+}
+
+export async function fetchCatalogReportStatus(id: number): Promise<CatalogReportStatus> {
+  const response = await request(`/api/feat_catalog/${id}/report-status`)
+  if (!response.ok) throw new Error('报告签发状态读取失败')
+  return await response.json()
+}
+
 export async function downloadEntries(
   key: string,
   filters: Record<string, string> = {},
